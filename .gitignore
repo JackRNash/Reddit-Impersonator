@@ -1,0 +1,5 @@
+secrets.py
+models/
+checkpoint/
+outputs.txt
+# outputs.txt is where I'm saving notable excerpts
