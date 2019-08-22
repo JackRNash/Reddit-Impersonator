@@ -2,6 +2,8 @@ import praw
 import time
 import random
 import secrets
+import argparse
+import tqdm
 import gpt_2_simple as gpt2 # Can be installed with pip if you don't have
 
 # Just made a seperate file instead of using praw.ini format, had some
@@ -12,6 +14,7 @@ reddit = praw.Reddit(user_agent='Reddit impersonator using gpt-2',
                      client_secret=secrets.client_secret,
                      password=secrets.password,
                      username=secrets.username)
+comment_delimiter='\n\n\n\n\n'
 
 def get_comments(reddit=reddit, subreddit_str='cornell', print_every=10, comment_delimiter='\n\n\n\n\n', num_posts = 1000):
     """
@@ -19,7 +22,7 @@ def get_comments(reddit=reddit, subreddit_str='cornell', print_every=10, comment
 
     reddit - A praw.Reddit object that will be used to scrape the posts
     subreddit_str - String that specifies subreddit(s) to scrape(do multiple with a + like 'cornell+college')
-    print_every - How often to print an update
+    print_every - How often to print an update (every _ number of posts scanned)
     comment_delimiter - String to be inserted after each comment
     num_posts - Number of posts to scrape(limited due to praw/Reddit api).
                 None results in max num of posts
@@ -31,22 +34,20 @@ def get_comments(reddit=reddit, subreddit_str='cornell', print_every=10, comment
     prev_time = time.time()
 
     print('\nScraping posts\n' + '-'*20)
-    for submission in subreddit.hot(limit=num_posts):
+    for submission in tqdm(subreddit.hot(limit=num_posts)):
         # Get ALL comments
         submission.comments.replace_more(limit=None, threshold=0)
 
         for comment in submission.comments:
+            # Ignore "users" like /u/Cornell_Class_Bot which aren't actual humans
             if 'bot' in str(comment.author).lower():
-                # Ignore "users" like /u/Cornell_Class_Bot which aren't actual humans
                 continue
             comments.append(str(comment.body) + comment_delimiter)
-            #print(comment.body)
-            #print('\n')
 
         counter += 1
         if counter % print_every == 0:
             print('{0}/{1} ... Time for {3} posts: {2:.3f}s'.format(counter,
-                                num_posts, time.time() - prev_time, print_every))
+                        num_posts, time.time() - prev_time, print_every))
             prev_time = time.time()
 
     # Write to file, overriding previous one
@@ -55,8 +56,6 @@ def get_comments(reddit=reddit, subreddit_str='cornell', print_every=10, comment
 
     print('Saved {} comments from {} posts'.format(len(comments), counter))
     print('Change the name of the file to avoid being overridden in the future.')
-
-
 
 
 def finetune_gpt2(iterations=1000, text_path='scraped_text\comments.txt'):
@@ -69,8 +68,6 @@ def finetune_gpt2(iterations=1000, text_path='scraped_text\comments.txt'):
     if not gpt2.is_gpt2_downloaded(model_name='345M'):
         print('Warning: Downloading large file')
         gpt2.download_gpt2(model_name='345M')
-    # sess = gpt2.start_tf_sess()
-    # tf.reset_default_graph()
     print('\nFinetuning\nWarning: Very slow without GPU')
     print('-'*30)
     gpt2.finetune(sess,
@@ -78,6 +75,7 @@ def finetune_gpt2(iterations=1000, text_path='scraped_text\comments.txt'):
                   model_name='345M',
                   overwrite=True,
                   steps=iterations)
+
 
 def predict_comment(seed_phrase, num_parents):
     """
@@ -103,6 +101,7 @@ def predict_comment(seed_phrase, num_parents):
     print('Responded:', comment)
     return comment
 
+
 def make_comment(subreddit='cornell', num_comments=(3, 7), mode='new', debug_mode=False):
     """
     Method to call for making comments on a subreddit
@@ -122,17 +121,17 @@ def make_comment(subreddit='cornell', num_comments=(3, 7), mode='new', debug_mod
     else:
         subreddit_selection = subreddit.new(limit=2*max_comments)
 
+    # Get subset of text posts
     posts = [submission for submission in subreddit_selection if len(submission.selftext) > 0]
-
     posts_to_comment = random.sample(posts, num_comments)
 
     # Comment on selected posts
     for post in posts_to_comment:
-        print('\n\nPost title:' + post.title)
+        print('\n\nPost title:', post.title)
         seed_phrase = post.selftext+comment_delimiter
 
         # REMOVED ABILITY TO RESPOND TO COMMENTS
-        # That's what's commented out below. Performance was quite poor. Keeping code
+        # That's what's commented out below. Comments were low quality. Keeping code
         # around for experimentation later
 
         # seed_phrase = [post.selftext+comment_delimiter] # Use as input to the model
@@ -160,10 +159,38 @@ def make_comment(subreddit='cornell', num_comments=(3, 7), mode='new', debug_mod
         # bot_comment = predict_comment(seed_phrase, num_parents)
         bot_comment = predict_comment(seed_phrase, 0)
         if not debug_mode:
-            submission.reply(bot_comment)
+            post.reply(bot_comment)
+
 
 if __name__ == '__main__':
-    comment_delimiter='\n\n\n\n\n'
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-d', '--download', action='store_true',
+            help='Download the pretrained, but not finetuned model. Should do on first run. Bot will not generate comments.')
+    parser.add_argument('-f', '--finetune', action='store_true',
+            help='Finetune the model with scraped_text\comments.txt. Bot will not generate comments.')
+    parser.add_argument('-s', '--scrape', default='', help='Subreddit to scrape comments from')
+    parser.add_argument('-fs', '--from_scratch', action='store_true',
+            help='Do not use the saved checkpoint of a finetuned gpt2 model')
+    parser.add_argument('--debug', action='store_true',
+            help='Enables debug mode where comments are not actually replied to')
+    args = parser.parse_args()
+
+    if len(args.scrape) > 0:
+        get_comments(subreddit_str=args.scrape)
+        print('\n\nNext phase: Predicting comments\nPress CTRL + C to abort')
+
     sess = gpt2.start_tf_sess()
-    gpt2.load_gpt2(sess)
-    make_comment(subreddit='cornell', mode='hot', num_comments=(2,6), debug_mode=True)
+    if args.download:
+        gpt2.download_gpt2(model_name='345M')
+    if args.from_scratch:
+        gpt2.load_gpt2(sess, run_name='345M', checkpoint_dir='models')
+    else:
+        print('Loading checkpoint...')
+        gpt2.load_gpt2(sess)
+    if args.finetune:
+        finetune_gpt2()
+
+    # Rarely download/finetune and then want to generate comments, so only gen
+    # comments when these options are not enabled.
+    if not(args.download or args.finetune):
+        make_comment(subreddit='cornell', mode='new', num_comments=(2,6), debug_mode=args.debug)
