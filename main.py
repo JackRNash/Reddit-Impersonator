@@ -4,6 +4,7 @@ import random
 import secrets
 import argparse
 import tqdm
+import os.path
 import gpt_2_simple as gpt2 # Can be installed with pip if you don't have
 
 # Just made a seperate file instead of using praw.ini format, had some
@@ -14,9 +15,9 @@ reddit = praw.Reddit(user_agent='Reddit impersonator using gpt-2',
                      client_secret=secrets.client_secret,
                      password=secrets.password,
                      username=secrets.username)
-comment_delimiter='\n\n\n\n\n'
+comment_delimiter = '\n\n\n\n\n'
 
-def get_comments(reddit=reddit, subreddit_str='cornell', print_every=10, comment_delimiter='\n\n\n\n\n', num_posts = 1000):
+def get_comments(reddit=reddit, subreddit_str='cornell', print_every=10, comment_delimiter=comment_delimiter, num_posts = 1000):
     """
     Get the comments of the specified subreddit(s)
 
@@ -30,11 +31,11 @@ def get_comments(reddit=reddit, subreddit_str='cornell', print_every=10, comment
     subreddit = reddit.subreddit(subreddit_str)
 
     comments = []
-    counter = 0
     prev_time = time.time()
+    counter = 0
 
     print('\nScraping posts\n' + '-'*20)
-    for submission in tqdm(subreddit.hot(limit=num_posts)):
+    for counter, submission in enumerate(subreddit.hot(limit=num_posts)):
         # Get ALL comments
         submission.comments.replace_more(limit=None, threshold=0)
 
@@ -44,17 +45,17 @@ def get_comments(reddit=reddit, subreddit_str='cornell', print_every=10, comment
                 continue
             comments.append(str(comment.body) + comment_delimiter)
 
-        counter += 1
-        if counter % print_every == 0:
-            print('{0}/{1} ... Time for {3} posts: {2:.3f}s'.format(counter,
-                        num_posts, time.time() - prev_time, print_every))
+        if (counter+1) % print_every == 0:
+            print('{0}/{1} ... Time for {3} posts: {2:.3f}s'.format(counter+1,
+                    num_posts, time.time() - prev_time, print_every))
             prev_time = time.time()
 
     # Write to file, overriding previous one
-    file = open('scraped_text\comments_{}.txt'.format(subreddit_str), 'w', encoding="utf-8")
+    path = 'scraped_text\comments_{}.txt'.format(subreddit_str)
+    file = open(path, 'w', encoding="utf-8")
     file.write(''.join(comments))
 
-    print('Saved {} comments from {} posts'.format(len(comments), counter))
+    print('Saved {} comments from {} posts in {}'.format(len(comments), counter+1, path))
     print('Change the name of the file to avoid being overridden in the future.')
 
 
@@ -65,11 +66,15 @@ def finetune_gpt2(iterations=1000, text_path='scraped_text\comments.txt'):
     text_path - Directory of text file to use to finetune_gpt
     iterations - Iterations to train gpt2
     """
+    assert os.path.exists(text_path), 'Text file {} doesn\'t exist!'.format(text_path)
+
     if not gpt2.is_gpt2_downloaded(model_name='345M'):
         print('Warning: Downloading large file')
         gpt2.download_gpt2(model_name='345M')
+
     print('\nFinetuning\nWarning: Very slow without GPU')
     print('-'*30)
+
     gpt2.finetune(sess,
                   text_path,
                   model_name='345M',
@@ -86,11 +91,11 @@ def predict_comment(seed_phrase, num_parents):
     seed_phrase - String to use as input to prime the model
     num_parents - number of parent comments to comment being replied to
     """
-    print('Predicting comment')
+    print('Predicting comment...')
     start_time = time.time()
     possible_comments = gpt2.generate(sess, prefix=seed_phrase,
-                        include_prefix=False, return_as_list=True)
-    print('Time it took to generate: {:.3f}s'.format(time.time()-start_time))
+                                      include_prefix=False, return_as_list=True)
+    print('Time to generate: {:.3f}s'.format(time.time()-start_time))
     possible_comments = possible_comments[0].split(comment_delimiter)
 
     # Comments quickly become irrelevent, so pick one of the more recent comments
@@ -165,7 +170,8 @@ def make_comment(subreddit='cornell', num_comments=(3, 7), mode='new', debug_mod
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-d', '--download', action='store_true',
-            help='Download the pretrained, but not finetuned model. Should do on first run. Bot will not generate comments.')
+            help=('Download the pretrained, but not finetuned model. Should do on '
+                  'first run. Bot will not generate comments.'))
     parser.add_argument('-f', '--finetune', action='store_true',
             help='Finetune the model with scraped_text\comments.txt. Bot will not generate comments.')
     parser.add_argument('-s', '--scrape', default='', help='Subreddit to scrape comments from')
@@ -184,7 +190,7 @@ if __name__ == '__main__':
         gpt2.download_gpt2(model_name='345M')
     if args.from_scratch:
         gpt2.load_gpt2(sess, run_name='345M', checkpoint_dir='models')
-    else:
+    else: # load from checkpoint
         print('Loading checkpoint...')
         gpt2.load_gpt2(sess)
     if args.finetune:
